@@ -118,6 +118,7 @@ def _print_banner(config: LaimiuConfig, agent: AgentLoop, memory: MemoryManager)
         # Get tool counts
         builtin_count = len([t for t in agent.tools.list_tools()])
         stats = memory.get_stats()
+        mode = "multi-agent" if config.multi_agent.enabled else "single-agent"
 
         banner = Table(show_header=False, box=None, padding=(0, 2))
         banner.add_row(
@@ -127,6 +128,10 @@ def _print_banner(config: LaimiuConfig, agent: AgentLoop, memory: MemoryManager)
         banner.add_row(
             Text("Model", style="dim"),
             Text(f"{provider_name}/{model_name}", style="green"),
+        )
+        banner.add_row(
+            Text("Mode", style="dim"),
+            Text(mode, style="green"),
         )
         banner.add_row(
             Text("Tools", style="dim"),
@@ -273,7 +278,14 @@ async def _run_chat_single(config: LaimiuConfig) -> None:
         except Exception as e:
             logger.error(f"Chat error: {e}")
             if use_rich:
-                console.print(f"[red]Error: {e}[/red]")
+                from rich.panel import Panel as _Panel
+                from rich.text import Text as _Text
+                console.print(_Panel(
+                    _Text(str(e), style="bold red"),
+                    title="[bold red]Error[/bold red]",
+                    border_style="red",
+                    padding=(0, 1),
+                ))
             else:
                 print(f"Error: {e}")
 
@@ -469,28 +481,7 @@ async def _run_chat_multi(config: LaimiuConfig) -> None:
                                 print(f"Worker task {task.id}: {bg_msg[:50]}...")
                         continue
                     elif user_input.lower() == "/help":
-                        help_text = f"""
-Available commands (v{__version__}, multi-agent):
-  /model [name]       - Show or switch LLM provider
-  /agents             - Show agent pool status
-  /bg <message>       - Send task to worker agent (non-blocking)
-  /dream              - Run dream cycle (memory consolidation)
-  /memory             - Show memory stats and index
-  /tools              - List all registered tools
-  /recall <query>     - Search memories
-  /config             - Show current configuration
-  /stats              - Show session statistics
-  /health             - Show system health status
-  /snapshot [tag]     - Create a state snapshot
-  /snapshots          - List all snapshots
-  /rollback [tag]     - Rollback to a snapshot
-  /patterns           - Show tracked pattern memory
-  /quit               - Exit Laimiu
-"""
-                        if use_rich:
-                            console.print(help_text)
-                        else:
-                            print(help_text)
+                        _print_help(console, use_rich, multi_agent=True)
                         continue
                     else:
                         # Delegate other commands to brain worker
@@ -577,6 +568,63 @@ Available commands (v{__version__}, multi-agent):
         dream_results = await dream.dream()
         if use_rich and not dream_results.get("skipped"):
             console.print("[dim]Dream cycle completed[/dim]")
+
+
+def _print_help(console: Any, use_rich: bool, multi_agent: bool = False) -> None:
+    """Render /help as a Rich Table."""
+    from laimiu import __version__
+    sections = [
+        ("Chat", [
+            ("/model [name]", "Show or switch LLM provider"),
+            ("/recall <query>", "Search memories"),
+            ("/quit", "Exit Laimiu"),
+        ]),
+        ("System", [
+            ("/dream", "Run dream cycle (memory consolidation)"),
+            ("/memory", "Show memory stats and index"),
+            ("/tools", "List all registered tools"),
+            ("/config", "Show current configuration"),
+            ("/stats", "Show session statistics"),
+            ("/health", "Show system health status"),
+            ("/patterns", "Show tracked pattern memory"),
+        ]),
+        ("Snapshots", [
+            ("/snapshot [tag]", "Create a state snapshot"),
+            ("/snapshots", "List all snapshots"),
+            ("/rollback [tag]", "Rollback to a snapshot"),
+        ]),
+    ]
+    if multi_agent:
+        sections.insert(1, ("Multi-Agent", [
+            ("/agents", "Show agent pool status"),
+            ("/bg <message>", "Send task to worker agent (non-blocking)"),
+        ]))
+
+    if use_rich:
+        from rich.table import Table
+        from rich.panel import Panel
+        table = Table(
+            title=f"Commands (v{__version__})",
+            show_header=True,
+            header_style="bold cyan",
+            border_style="dim",
+            padding=(0, 2),
+        )
+        table.add_column("Command", style="green")
+        table.add_column("Description", style="white")
+        for section_name, cmds in sections:
+            for i, (cmd, desc) in enumerate(cmds):
+                table.add_row(cmd, desc, end_section=(i == len(cmds) - 1))
+        console.print()
+        console.print(Panel(table, border_style="cyan", padding=(0, 1)))
+    else:
+        mode = "multi-agent" if multi_agent else ""
+        print(f"\nAvailable commands (v{__version__}, {mode}):")
+        for section_name, cmds in sections:
+            print(f"\n  -- {section_name} --")
+            for cmd, desc in cmds:
+                print(f"  {cmd:<22s} {desc}")
+        print()
 
 
 async def _handle_command(
@@ -688,9 +736,23 @@ async def _handle_command(
         mem_stats = memory.get_stats()
         proc_stats = procedural.get_stats()
         if use_rich:
-            console.print(f"Session: {stats}")
-            console.print(f"Memory: {mem_stats}")
-            console.print(f"Procedural: {proc_stats}")
+            from rich.table import Table
+            from rich.columns import Columns
+
+            def _make_stat_table(title: str, data: dict) -> Table:
+                t = Table(title=title, show_header=False, box=None, padding=(0, 1))
+                t.add_column(style="dim cyan")
+                t.add_column(style="green")
+                for k, v in data.items():
+                    t.add_row(str(k), str(v))
+                return t
+
+            tables = [
+                _make_stat_table("Session", stats),
+                _make_stat_table("Memory", mem_stats),
+                _make_stat_table("Procedural", proc_stats),
+            ]
+            console.print(Columns(tables, padding=(2, 4)))
         else:
             print(f"Session: {stats}")
             print(f"Memory: {mem_stats}")
@@ -830,28 +892,7 @@ async def _handle_command(
                 print(f"  {p.tool_name} | str={p.strength:.2f} | {p.level} | occ={p.occurrence} | {p.success_rate:.0%}")
 
     elif command == "/help":
-        help_text = f"""
-Available commands (v{__version__}):
-  /model [name]       - Show or switch LLM provider
-  /agents             - Show agent pool status (multi-agent)
-  /bg <message>       - Send task to worker agent (multi-agent)
-  /dream              - Run dream cycle (memory consolidation)
-  /memory             - Show memory stats and index
-  /tools              - List all registered tools
-  /recall <query>     - Search memories
-  /config             - Show current configuration
-  /stats              - Show session statistics
-  /health             - Show system health status
-  /snapshot [tag]     - Create a state snapshot
-  /snapshots          - List all snapshots
-  /rollback [tag]     - Rollback to a snapshot
-  /patterns           - Show tracked pattern memory
-  /quit               - Exit Laimiu
-"""
-        if use_rich:
-            console.print(help_text)
-        else:
-            print(help_text)
+        _print_help(console, use_rich, multi_agent=False)
 
     else:
         if use_rich:

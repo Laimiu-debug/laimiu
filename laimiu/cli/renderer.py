@@ -4,8 +4,8 @@ Design inspired by Claude Code + Hermes:
 - Color-coded user/assistant/tool/thinking zones
 - Per-response header with model, timing, tools used
 - Streaming Markdown with syntax highlighting
-- Compact inline tool call status with spinners
-- Dim thinking/code blocks
+- Animated spinner for active tool calls
+- Scrollable thinking display (last N lines, not truncated chars)
 - Clean separators between turns
 """
 
@@ -19,6 +19,7 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.rule import Rule
+from rich.spinner import Spinner
 from rich.text import Text
 
 if TYPE_CHECKING:
@@ -28,7 +29,6 @@ if TYPE_CHECKING:
     from laimiu.core.message_bus import BusMessage
 
 # ── Color Palette ──────────────────────────────────────────────
-# Claude-inspired: subdued, professional, high contrast
 C_USER_BORDER = "bright_blue"
 C_USER_TITLE = "bold bright_blue"
 
@@ -54,12 +54,17 @@ AGENT_STYLES: dict[str, tuple[str, str]] = {
 }
 
 # ── Icons ──────────────────────────────────────────────────────
-ICON_TOOL = "⚙"
-ICON_OK = "✓"
-ICON_FAIL = "✗"
-ICON_THINK = "…"
-ICON_CLOCK = "⏱"
-ICON_BOX = "📦"
+ICON_TOOL = "\u2699"      # ⚙
+ICON_OK = "\u2713"        # ✓
+ICON_FAIL = "\u2717"      # ✗
+ICON_THINK = "\u2026"     # …
+ICON_CLOCK = "\u23f1"     # ⏱
+ICON_BOX = "\U0001f4e6"   # 📦
+ICON_BRAIN = "\U0001f9e0" # 🧠
+ICON_LIGHTNING = "\u26a1"  # ⚡
+
+# Thinking display limits
+THINKING_MAX_LINES = 5
 
 
 class ChatRenderer:
@@ -97,6 +102,7 @@ class ChatRenderer:
         full_response = ""
         tool_log: list[tuple[str, float, bool]] = []  # (name, elapsed_ms, success)
         is_thinking = False
+        thinking_content = ""
         t_start = time.perf_counter()
         t_first_token: float | None = None
 
@@ -112,6 +118,7 @@ class ChatRenderer:
             async for msg in agent.run(user_input):
                 if msg.type == "thinking":
                     is_thinking = True
+                    thinking_content = msg.content
                     if t_first_token is None:
                         t_first_token = time.perf_counter()
                     live.update(self._build_thinking(msg.content))
@@ -170,6 +177,7 @@ class ChatRenderer:
         # ── Footer: model + timing ────────────────────────────
         self._render_footer(
             model=model_name,
+            provider=provider_name,
             think_time=think_time,
             total_time=total_time,
             tool_count=len(tool_log),
@@ -202,7 +210,7 @@ class ChatRenderer:
             )
         elif msg.type == "tool_call":
             self.console.print(
-                Text(f"  {ICON_TOOL} [{msg.source}] → {msg.content}...", style=C_TOOL_ACTIVE)
+                Text(f"  {ICON_TOOL} [{msg.source}] \u2192 {msg.content}...", style=C_TOOL_ACTIVE)
             )
         elif msg.type == "tool_result":
             elapsed = msg.metadata.get("elapsed_ms", 0)
@@ -236,21 +244,33 @@ class ChatRenderer:
     # ── Internal builders ─────────────────────────────────────
 
     def _build_thinking(self, content: str = "") -> Group:
-        """Build thinking indicator with optional reasoning text."""
+        """Build thinking indicator with scrollable reasoning text.
+
+        Shows the last N lines of reasoning (not truncated by character count).
+        """
         parts: list = []
         if content:
-            # Show a snippet of reasoning (last 200 chars)
-            snippet = content[-200:] if len(content) > 200 else content
+            lines = content.splitlines()
+            # Keep last N lines to avoid flooding the terminal
+            if len(lines) > THINKING_MAX_LINES:
+                display_lines = lines[-THINKING_MAX_LINES:]
+                snippet = "... (earlier reasoning hidden)\n" + "\n".join(display_lines)
+            else:
+                snippet = content
+
+            token_hint = f"Thinking \u00b7 {len(content)} chars"
             parts.append(
                 Panel(
                     Text(snippet, style=C_THINKING),
-                    title=f"[{C_THINKING}]Thinking[/{C_THINKING}]",
+                    title=f"[{C_THINKING}]{token_hint}[/{C_THINKING}]",
                     border_style="dim",
                     padding=(0, 1),
                 )
             )
         else:
-            parts.append(Text(f"  {ICON_THINK} Thinking...", style=C_THINKING))
+            parts.append(
+                Spinner("dots", Text(f"  {ICON_THINK} Thinking...", style=C_THINKING))
+            )
         return Group(*parts)
 
     def _build_response(
@@ -271,10 +291,10 @@ class ChatRenderer:
                 Text(f"  {ICON_TOOL} {name}  {mark} {elapsed:.0f}ms", style=style)
             )
 
-        # ── Active tool (spinner-like) ───────────────────────
+        # ── Active tool (animated spinner) ───────────────────
         if active_tool:
             parts.append(
-                Text(f"  {ICON_TOOL} {active_tool} ...", style=C_TOOL_ACTIVE)
+                Spinner("dots", Text(f"  {ICON_TOOL} {active_tool}", style=C_TOOL_ACTIVE))
             )
 
         # ── Spacing ──────────────────────────────────────────
@@ -286,7 +306,7 @@ class ChatRenderer:
             parts.append(Markdown(content))
         else:
             parts.append(
-                Text(f"  {ICON_THINK} Thinking...", style=C_THINKING)
+                Spinner("dots", Text(f"  {ICON_THINK} Thinking...", style=C_THINKING))
             )
 
         return Group(*parts)
@@ -294,22 +314,36 @@ class ChatRenderer:
     def _render_footer(
         self,
         model: str,
-        think_time: float,
-        total_time: float,
-        tool_count: int,
+        provider: str = "",
+        think_time: float = 0.0,
+        total_time: float = 0.0,
+        tool_count: int = 0,
     ) -> None:
         """Render the timing/model footer after each response."""
-        parts: list[str] = []
+        parts: list[Text] = []
 
-        if model:
-            parts.append(f"[{C_AI_HEADER}]{model}[/{C_AI_HEADER}]")
+        if provider and model:
+            parts.append(Text.from_markup(
+                f"[{C_AI_HEADER}]{provider}/{model}[/{C_AI_HEADER}]"
+            ))
+        elif model:
+            parts.append(Text.from_markup(
+                f"[{C_AI_HEADER}]{model}[/{C_AI_HEADER}]"
+            ))
 
-        parts.append(f"[{C_TOOL_DIM}]{ICON_CLOCK} think {think_time:.1f}s[/{C_TOOL_DIM}]")
-        parts.append(f"[{C_TOOL_DIM}]total {total_time:.1f}s[/{C_TOOL_DIM}]")
+        parts.append(Text.from_markup(
+            f"[{C_TOOL_DIM}]{ICON_CLOCK} think {think_time:.1f}s[/{C_TOOL_DIM}]"
+        ))
+        parts.append(Text.from_markup(
+            f"[{C_TOOL_DIM}]{ICON_CLOCK} total {total_time:.1f}s[/{C_TOOL_DIM}]"
+        ))
 
         if tool_count > 0:
-            parts.append(f"[{C_TOOL_DIM}]{ICON_BOX} {tool_count} tools[/{C_TOOL_DIM}]")
+            parts.append(Text.from_markup(
+                f"[{C_TOOL_DIM}]{ICON_BOX} {tool_count} tools[/{C_TOOL_DIM}]"
+            ))
 
-        footer = Text(" · ").join(Text.from_markup(p) for p in parts)
+        separator = Text(" \u00b7 ", style=C_TOOL_DIM)
+        footer = separator.join(parts)
         self.console.print(footer)
         self.console.print()  # spacing before separator
