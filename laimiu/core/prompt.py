@@ -44,14 +44,12 @@ def build_system_prompt(
     memory_index: str = "",
     tool_list: list[ToolDefinition] | None = None,
     user_prefs: str = "",
+    provider_name: str = "",
+    model_name: str = "",
 ) -> str:
     """Build the system prompt from components.
 
     Strictly controlled to fit within SYSTEM_PROMPT_MAX_TOKENS (~2000 tokens).
-    Components:
-    - SOUL.md (personality): ~500 tokens
-    - MEMORY.md index (≤200 lines): ~800 tokens
-    - Tool list: ~500 tokens
     """
     parts = []
 
@@ -60,21 +58,44 @@ def build_system_prompt(
         soul = load_soul()
     parts.append(soul)
 
-    # 2. User preferences (brief)
+    # 2. Identity — tell the model WHO it is, so it doesn't hallucinate
+    identity_lines = ["## Identity"]
+    identity_lines.append(
+        "Your name is Laimiu. You are an independent AI assistant with your own memory and learning system."
+    )
+    if provider_name or model_name:
+        identity_lines.append(
+            f"Currently powered by: {provider_name}/{model_name}. "
+            "You are NOT Claude, ChatGPT, or any other assistant — you are Laimiu."
+        )
+    else:
+        identity_lines.append(
+            "You are NOT Claude, ChatGPT, or any other assistant — you are Laimiu."
+        )
+    parts.append("\n".join(identity_lines))
+
+    # 3. Conversation rules
+    rules = """## Conversation Rules
+- Do NOT repeat greetings or self-introductions — just answer the user directly
+- Do NOT list your capabilities unless the user explicitly asks
+- Continue the conversation naturally, as if you remember everything from previous turns
+- Respond in the same language the user uses (Chinese → Chinese, English → English)
+- Be concise — avoid unnecessary filler"""
+    parts.append(rules)
+
+    # 4. User preferences (brief)
     if user_prefs:
-        # Truncate to keep concise
         prefs_text = user_prefs[:500]
         parts.append(f"## User Preferences\n{prefs_text}")
 
-    # 3. Memory index (Tier 1)
+    # 5. Memory index (Tier 1)
     if memory_index and memory_index.strip():
-        # Truncate if too long
         lines = memory_index.strip().split("\n")
-        if len(lines) > 50:  # Keep index concise in prompt
+        if len(lines) > 50:
             lines = lines[:50]
         parts.append("## Memory Index\n" + "\n".join(lines))
 
-    # 4. Tool list
+    # 6. Tool list
     if tool_list:
         parts.append(format_tool_list(tool_list))
 
@@ -83,7 +104,6 @@ def build_system_prompt(
 
 def estimate_tokens(text: str) -> int:
     """Rough token count estimate (1 token ≈ 4 chars for English, ~2 chars for Chinese)."""
-    # Simple heuristic
     chinese_chars = sum(1 for c in text if "\u4e00" <= c <= "\u9fff")
     other_chars = len(text) - chinese_chars
     return chinese_chars // 2 + other_chars // 4

@@ -59,6 +59,12 @@ class AgentLoop:
         # Load soul
         self.soul = load_soul()
 
+        # Provider/model info for system prompt identity
+        self._provider_name = config.provider.default
+        self._model_name = ""
+        if config.provider.models.get(self._provider_name):
+            self._model_name = config.provider.models[self._provider_name].model
+
         # Session tracking
         self._session_id: str | None = None
         self._tools_used_this_turn: list[dict[str, Any]] = []
@@ -89,6 +95,8 @@ class AgentLoop:
             memory_index=self.memory.get_index(),
             tool_list=self.tools.list_tools(),
             user_prefs=self.memory.get_user_preferences(),
+            provider_name=self._provider_name,
+            model_name=self._model_name,
         )
 
         # Build messages within token budget
