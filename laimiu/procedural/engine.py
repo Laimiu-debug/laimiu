@@ -49,8 +49,11 @@ class ProceduralEngine:
             logger.info("Procedural memory disabled")
             return []
 
-        # Find extractable patterns
-        patterns = self.extractor.find_extractable_patterns()
+        # Get existing tool names for dedup
+        existing = {t.name for t in self.registry.list_tools()}
+
+        # Find extractable patterns (excluding builtins)
+        patterns = self.extractor.find_extractable_patterns(existing_tools=existing)
         if not patterns:
             logger.info("No extractable patterns found")
             return []
@@ -58,10 +61,16 @@ class ProceduralEngine:
         logger.info(f"Found {len(patterns)} extractable patterns")
 
         new_tools = []
+        generated_names: set[str] = set()
         for pattern in patterns:
             try:
                 tool_name = await self._generate_tool(pattern)
                 if tool_name:
+                    # Skip if we already generated a tool with this name
+                    if tool_name in generated_names:
+                        logger.warning(f"Duplicate tool name '{tool_name}', skipping")
+                        continue
+                    generated_names.add(tool_name)
                     new_tools.append(tool_name)
                     logger.info(f"Generated tool: {tool_name}")
             except Exception as e:

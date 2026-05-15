@@ -11,11 +11,7 @@ logger = logging.getLogger("laimiu.dream.extract")
 
 
 class ProceduralExtractor:
-    """Phase 5: Extract - convert repeated patterns into executable tools.
-
-    This is the key innovation of v3: the Dream engine doesn't just
-    organize text memories, it creates new capabilities.
-    """
+    """Phase 5: Extract - convert repeated patterns into executable tools."""
 
     def __init__(self, procedural_engine: ProceduralEngine):
         self.engine = procedural_engine
@@ -32,27 +28,26 @@ class ProceduralExtractor:
         }
 
         try:
-            # Find extractable patterns (using strength-based filtering)
-            from laimiu.procedural.extractor import PatternExtractor
+            # Get existing tool names for logging
+            existing = {t.name for t in self.engine.registry.list_tools()}
 
-            patterns = self.engine.extractor.find_extractable_patterns()
-            actions["patterns_analyzed"] = len(patterns)
-
-            if not patterns:
-                logger.info("No patterns to extract")
-                return actions
-
-            logger.info(
-                f"Found {len(patterns)} extractable patterns "
-                f"(strength >= {self.engine.config.procedural.extract_strength})"
-            )
-
-            # Generate tools from patterns
+            # Run extraction (engine handles dedup internally)
             new_tools = await self.engine.run_extraction()
             actions["tools_generated"] = new_tools
+            actions["patterns_analyzed"] = len(
+                self.engine.extractor.find_extractable_patterns(existing_tools=existing)
+            )
 
-            # Clear extracted patterns from tracker
-            for pattern in patterns:
+            if not new_tools:
+                logger.info("No new tools generated")
+                return actions
+
+            logger.info(f"Generated {len(new_tools)} new tools: {new_tools}")
+
+            # Clear ALL extractable patterns from tracker after extraction
+            # (whether they were successfully extracted or not)
+            all_extractable = self.engine.tracker.get_extractable_patterns()
+            for pattern in all_extractable:
                 key = f"{pattern.tool_name}:{pattern.args_signature}"
                 self.engine.tracker.clear_pattern(key)
 

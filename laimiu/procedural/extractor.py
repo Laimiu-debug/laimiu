@@ -17,19 +17,37 @@ class PatternExtractor:
     1. Its memory strength >= extract_strength threshold
     2. It has a reasonable success rate (>= 50%)
     3. The args suggest a consistent, automatable workflow
+    4. It is NOT already a builtin tool (skip duplicates)
     """
+
+    # Tool names that already exist as builtins — never extract these
+    BUILTIN_TOOL_NAMES = {
+        "code_exec", "read_file", "write_file", "search_files", "grep_files",
+        "memory_recall", "shell", "web_search", "web_fetch",
+    }
 
     def __init__(self, tracker: PatternTracker, extract_strength: float = 0.6):
         self.tracker = tracker
         self.extract_strength = extract_strength
 
-    def find_extractable_patterns(self) -> list[Pattern]:
+    def find_extractable_patterns(
+        self, existing_tools: set[str] | None = None
+    ) -> list[Pattern]:
         """Find patterns that should be converted to tools."""
+        skip_names = self.BUILTIN_TOOL_NAMES.copy()
+        if existing_tools:
+            skip_names.update(existing_tools)
+
         patterns = self.tracker.get_extractable_patterns()
 
-        # Filter: only patterns with clear structure
+        # Filter: only patterns with clear structure and NOT a builtin
         extractable = []
         for pattern in patterns:
+            if pattern.tool_name in skip_names:
+                logger.debug(
+                    f"Pattern '{pattern.tool_name}' skipped — already a registered tool"
+                )
+                continue
             if self._is_automatable(pattern):
                 extractable.append(pattern)
             else:
