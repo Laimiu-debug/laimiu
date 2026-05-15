@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
 from laimiu.constants import CHROMA_DIR
 
 logger = logging.getLogger("laimiu.memory.vector_store")
+
+# Serialize all ChromaDB writes — PersistentClient is not thread-safe.
+_chroma_lock = threading.Lock()
 
 
 class VectorStore:
@@ -56,22 +60,24 @@ class VectorStore:
     def store_note(self, note_id: str, content: str, metadata: dict[str, Any] | None = None) -> None:
         """Store a Tier 2 note's vector embedding."""
         collection = self._get_notes_collection()
-        # ChromaDB auto-generates embeddings if no embedding function is provided
-        collection.upsert(
-            ids=[note_id],
-            documents=[content],
-            metadatas=[metadata or {}],
-        )
+        with _chroma_lock:
+            # ChromaDB auto-generates embeddings if no embedding function is provided
+            collection.upsert(
+                ids=[note_id],
+                documents=[content],
+                metadatas=[metadata or {}],
+            )
         logger.debug(f"Stored note vector: {note_id}")
 
     def store_transcript_chunk(self, chunk_id: str, content: str, metadata: dict[str, Any] | None = None) -> None:
         """Store a Tier 3 transcript chunk's vector embedding."""
         collection = self._get_transcripts_collection()
-        collection.upsert(
-            ids=[chunk_id],
-            documents=[content],
-            metadatas=[metadata or {}],
-        )
+        with _chroma_lock:
+            collection.upsert(
+                ids=[chunk_id],
+                documents=[content],
+                metadatas=[metadata or {}],
+            )
         logger.debug(f"Stored transcript chunk: {chunk_id}")
 
     def search(

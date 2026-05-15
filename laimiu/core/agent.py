@@ -71,6 +71,9 @@ class AgentLoop:
         self._session_id: str | None = None
         self._tools_used_this_turn: list[dict[str, Any]] = []
 
+        # Router task override (e.g. "chat" for brain, "cheap" for worker)
+        self._router_task: str = "chat"
+
     def start_session(self) -> str:
         """Start a new conversation session."""
         self._session_id = self.memory.start_session()
@@ -109,7 +112,7 @@ class AgentLoop:
             accumulated_tool_calls: list[dict[str, Any]] = []
             accumulated_reasoning = ""
 
-            provider = self.router.get_provider("chat")
+            provider = self.router.get_provider(self._router_task)
             stream = provider.chat(messages, tools=openai_tools if openai_tools else None, stream=True)
 
             async for chunk in stream:

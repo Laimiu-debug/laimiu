@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 # Runtime data directory
 LAIMIU_HOME = Path.home() / ".laimiu"

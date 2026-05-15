@@ -148,7 +148,15 @@ def _print_banner(config: LaimiuConfig, agent: AgentLoop, memory: MemoryManager)
 
 
 async def _run_chat(config: LaimiuConfig) -> None:
-    """Main chat loop."""
+    """Main chat loop — dispatches to single or multi-agent mode."""
+    if config.multi_agent.enabled:
+        await _run_chat_multi(config)
+    else:
+        await _run_chat_single(config)
+
+
+async def _run_chat_single(config: LaimiuConfig) -> None:
+    """Original single-agent chat loop (unchanged behavior)."""
     try:
         from rich.console import Console
         from prompt_toolkit import PromptSession
@@ -166,43 +174,28 @@ async def _run_chat(config: LaimiuConfig) -> None:
     memory = MemoryManager(config)
     registry = ToolRegistry()
 
-    # Discover tools
     discover_builtin_tools(registry)
     generated_count = discover_generated_tools(registry)
 
-    # Create memory recall tool with manager reference
     from laimiu.tools.builtin.memory import MemoryRecallTool
     recall_tool = MemoryRecallTool(memory_manager=memory)
     registry.register(recall_tool)
 
-    # Procedural memory - use strength-based threshold
     tracker = PatternTracker(config.procedural.extract_strength)
     procedural = ProceduralEngine(config, tracker, registry, router)
-
-    # Reflection
     reflection = Reflection()
 
-    # Agent
     agent = AgentLoop(
-        config=config,
-        memory=memory,
-        tool_registry=registry,
-        router=router,
-        reflection=reflection,
-        procedural_tracker=tracker,
+        config=config, memory=memory, tool_registry=registry,
+        router=router, reflection=reflection, procedural_tracker=tracker,
     )
 
-    # Dream engine
     dream = DreamEngine(config, memory, procedural, router)
-
-    # Guardian for health checks
     guardian = Guardian()
 
-    # Renderer
     from laimiu.cli.renderer import ChatRenderer
     renderer = ChatRenderer(console) if use_rich else None
 
-    # Print banner
     if use_rich:
         _print_banner(config, agent, memory)
     else:
@@ -211,10 +204,8 @@ async def _run_chat(config: LaimiuConfig) -> None:
     if generated_count > 0:
         print(f"  Loaded {generated_count} learned tools")
 
-    # Start session
     session_id = agent.start_session()
 
-    # Status bar info
     provider_name = config.provider.default
     model_name = "?"
     if config.provider.models.get(provider_name):
@@ -224,7 +215,6 @@ async def _run_chat(config: LaimiuConfig) -> None:
     def _status_bar():
         return f" Laimiu v{__version__} | {provider_name}/{model_name} | {tool_count} tools | /help "
 
-    # Prompt session with status bar
     history_file = LAIMIU_HOME / "chat_history"
     if use_rich:
         session = PromptSession(
@@ -236,9 +226,8 @@ async def _run_chat(config: LaimiuConfig) -> None:
 
     while True:
         try:
-            # Get user input
             if use_rich:
-                user_input = await asyncio.get_event_loop().run_in_executor(
+                user_input = await asyncio.get_running_loop().run_in_executor(
                     None,
                     lambda: session.prompt("Laimiu> ", auto_suggest=AutoSuggestFromHistory())
                 )
@@ -249,7 +238,6 @@ async def _run_chat(config: LaimiuConfig) -> None:
             if not user_input:
                 continue
 
-            # Handle slash commands
             if user_input.startswith("/"):
                 should_continue = await _handle_command(
                     user_input, config, agent, memory, dream, procedural,
@@ -259,11 +247,9 @@ async def _run_chat(config: LaimiuConfig) -> None:
                     break
                 continue
 
-            # Regular chat — use structured renderer
             if renderer:
                 await renderer.render_turn(user_input, agent)
             else:
-                # Fallback: plain text
                 print("Thinking...", flush=True)
                 full_response = ""
                 async for msg in agent.run(user_input):
@@ -291,11 +277,300 @@ async def _run_chat(config: LaimiuConfig) -> None:
             else:
                 print(f"Error: {e}")
 
-    # End session
     agent.end_session()
     dream.increment_sessions()
 
-    # Check if dream should run
+    if dream.should_dream():
+        if use_rich:
+            console.print("[dim]Running dream cycle...[/dim]")
+        dream_results = await dream.dream()
+        if use_rich and not dream_results.get("skipped"):
+            console.print("[dim]Dream cycle completed[/dim]")
+
+
+async def _run_chat_multi(config: LaimiuConfig) -> None:
+    """Non-blocking multi-agent chat loop."""
+    from laimiu.core.agents import AgentOrchestrator, AgentRole, AgentWorker
+    from laimiu.core.message_bus import MessageBus
+    from laimiu.cli.renderer import ChatRenderer
+
+    try:
+        from rich.console import Console
+        from rich.panel import Panel as RichPanel
+        from rich.text import Text as RichText
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.history import FileHistory
+        from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+
+        console = Console()
+        use_rich = True
+    except ImportError:
+        console = None
+        use_rich = False
+        RichPanel = None  # type: ignore[assignment,misc]
+        RichText = None  # type: ignore[assignment,misc]
+
+    # -- Shared infrastructure ----------------------------------------
+    router = ProviderRouter(config)
+    memory = MemoryManager(config)
+    registry = ToolRegistry()
+
+    discover_builtin_tools(registry)
+    generated_count = discover_generated_tools(registry)
+
+    from laimiu.tools.builtin.memory import MemoryRecallTool
+    recall_tool = MemoryRecallTool(memory_manager=memory)
+    registry.register(recall_tool)
+
+    tracker = PatternTracker(config.procedural.extract_strength)
+    procedural = ProceduralEngine(config, tracker, registry, router)
+    reflection = Reflection()
+
+    dream = DreamEngine(config, memory, procedural, router)
+    guardian = Guardian()
+
+    # -- Build agent workers from config ------------------------------
+    message_bus = MessageBus()
+    orchestrator = AgentOrchestrator(message_bus)
+    renderer = ChatRenderer(console) if use_rich else None
+
+    ma_cfg = config.multi_agent
+    if not ma_cfg.agents:
+        # Default: brain only
+        brain_agent = AgentLoop(
+            config=config, memory=memory, tool_registry=registry,
+            router=router, reflection=reflection, procedural_tracker=tracker,
+        )
+        orchestrator.register_worker(AgentWorker(
+            name="brain", role=AgentRole.BRAIN, agent=brain_agent,
+        ))
+    else:
+        for name, role_cfg in ma_cfg.agents.items():
+            if not role_cfg.enabled:
+                continue
+            agent = AgentLoop(
+                config=config, memory=memory, tool_registry=registry,
+                router=router, reflection=reflection, procedural_tracker=tracker,
+            )
+            # Set the router task so worker agents use the cheap provider
+            agent._router_task = role_cfg.router_task
+            role_enum = AgentRole.BRAIN if role_cfg.role == "brain" else AgentRole.WORKER
+            orchestrator.register_worker(AgentWorker(
+                name=name, role=role_enum, agent=agent,
+            ))
+
+    # -- Banner -------------------------------------------------------
+    brain_worker = orchestrator.workers.get("brain")
+    if use_rich and brain_worker:
+        _print_banner(config, brain_worker.agent, memory)
+        console.print(f"  [cyan]Multi-agent mode[/cyan]: {', '.join(orchestrator.workers.keys())}")
+    else:
+        print(f"Laimiu v{__version__} | Multi-agent mode")
+
+    if generated_count > 0:
+        print(f"  Loaded {generated_count} learned tools")
+
+    orchestrator.start_sessions()
+
+    # -- Status bar ---------------------------------------------------
+    def _multi_status_bar():
+        parts = []
+        for w in orchestrator.workers.values():
+            state = "busy" if w.is_busy else "idle"
+            parts.append(f"{w.name}:{state}")
+        return f" Laimiu v{__version__} | {' | '.join(parts)} | /help "
+
+    history_file = LAIMIU_HOME / "chat_history"
+    session: PromptSession | None = None
+    if use_rich:
+        session = PromptSession(
+            history=FileHistory(str(history_file)),
+            bottom_toolbar=_multi_status_bar,
+        )
+
+    # -- Start background worker loop ---------------------------------
+    worker_loop_task = asyncio.create_task(orchestrator.run_worker_loop())
+    output_queue = orchestrator.get_output_queue()
+
+    # -- Non-blocking main loop ---------------------------------------
+    loop = asyncio.get_running_loop()
+
+    async def _read_input() -> str:
+        if session:
+            return await loop.run_in_executor(
+                None,
+                lambda: session.prompt("Laimiu> ", auto_suggest=AutoSuggestFromHistory())
+            )
+        return await loop.run_in_executor(None, lambda: input("Laimiu> "))
+
+    input_future: asyncio.Future | None = asyncio.ensure_future(_read_input())
+    output_future: asyncio.Future = asyncio.ensure_future(
+        message_bus.get_next_output(output_queue, timeout=0.15)
+    )
+
+    # Per-task content accumulation
+    _task_buffers: dict[str, str] = {}  # task_id -> accumulated content
+    _task_tools: dict[str, list] = {}   # task_id -> tool log entries
+
+    try:
+        while True:
+            wait_set = {f for f in [input_future, output_future] if f is not None}
+            done, _pending = await asyncio.wait(wait_set, return_when=asyncio.FIRST_COMPLETED)
+
+            # -- User input ready -------------------------------------
+            if input_future and input_future in done:
+                try:
+                    user_input = input_future.result()
+                except EOFError:
+                    break
+                except KeyboardInterrupt:
+                    input_future = asyncio.ensure_future(_read_input())
+                    continue
+                except Exception:
+                    input_future = asyncio.ensure_future(_read_input())
+                    continue
+
+                # Immediately restart input reader
+                input_future = asyncio.ensure_future(_read_input())
+
+                user_input = user_input.strip()
+                if not user_input:
+                    continue
+
+                # Handle slash commands
+                if user_input.startswith("/"):
+                    if user_input.lower() in ("/quit", "/exit", "/q"):
+                        break
+                    elif user_input.lower() == "/agents":
+                        status = orchestrator.get_status()
+                        if use_rich:
+                            from rich.table import Table
+                            table = Table(title="Agent Status")
+                            table.add_column("Agent", style="cyan")
+                            table.add_column("Role", style="green")
+                            table.add_column("State", style="yellow")
+                            table.add_column("Task", style="dim")
+                            for name, info in status.items():
+                                state = "[red]busy[/red]" if info["busy"] else "[green]idle[/green]"
+                                task = info["current_task"] or "-"
+                                table.add_row(name, info["role"], state, task)
+                            console.print(table)
+                        else:
+                            for name, info in status.items():
+                                print(f"  {name} ({info['role']}): {'busy' if info['busy'] else 'idle'}")
+                        continue
+                    elif user_input.lower().startswith("/bg "):
+                        bg_msg = user_input[4:].strip()
+                        if bg_msg:
+                            task = orchestrator.route_to_worker(bg_msg)
+                            if use_rich:
+                                console.print(f"[yellow]Worker task {task.id}: {bg_msg[:50]}...[/yellow]")
+                            else:
+                                print(f"Worker task {task.id}: {bg_msg[:50]}...")
+                        continue
+                    elif user_input.lower() == "/help":
+                        help_text = f"""
+Available commands (v{__version__}, multi-agent):
+  /model [name]       - Show or switch LLM provider
+  /agents             - Show agent pool status
+  /bg <message>       - Send task to worker agent (non-blocking)
+  /dream              - Run dream cycle (memory consolidation)
+  /memory             - Show memory stats and index
+  /tools              - List all registered tools
+  /recall <query>     - Search memories
+  /config             - Show current configuration
+  /stats              - Show session statistics
+  /health             - Show system health status
+  /snapshot [tag]     - Create a state snapshot
+  /snapshots          - List all snapshots
+  /rollback [tag]     - Rollback to a snapshot
+  /patterns           - Show tracked pattern memory
+  /quit               - Exit Laimiu
+"""
+                        if use_rich:
+                            console.print(help_text)
+                        else:
+                            print(help_text)
+                        continue
+                    else:
+                        # Delegate other commands to brain worker
+                        brain_w = orchestrator.workers.get("brain")
+                        if brain_w and brain_w.agent:
+                            should_exit = await _handle_command(
+                                user_input, config, brain_w.agent, memory,
+                                dream, procedural, guardian, console, use_rich,
+                            )
+                            if not should_exit:
+                                break
+                        continue
+
+                # Route regular message to brain (non-blocking)
+                orchestrator.route_message(user_input)
+
+                # Show user message panel
+                if renderer and RichPanel and RichText:
+                    console.print()
+                    console.print(
+                        RichPanel(
+                            RichText(user_input),
+                            title="[bold]You[/bold]",
+                            border_style="blue",
+                            padding=(0, 1),
+                        )
+                    )
+
+            # -- Agent output ready ------------------------------------
+            if output_future in done:
+                try:
+                    bus_msg = output_future.result()
+                except Exception:
+                    bus_msg = None
+
+                if bus_msg and renderer:
+                    tid = bus_msg.task_id
+                    if bus_msg.type == "content":
+                        # Accumulate content chunks per task
+                        _task_buffers.setdefault(tid, "")
+                        _task_buffers[tid] += bus_msg.content
+                    elif bus_msg.type == "task_done":
+                        # Task complete — render accumulated output
+                        accumulated = _task_buffers.pop(tid, "")
+                        _task_tools.pop(tid, None)
+                        if accumulated:
+                            from laimiu.core.message_bus import BusMessage as _BM
+                            renderer.render_agent_output(_BM(
+                                source=bus_msg.source,
+                                task_id=tid,
+                                type="content",
+                                content=accumulated,
+                            ))
+                        renderer.render_agent_separator()
+                    elif bus_msg.type == "thinking":
+                        # Show thinking indicator
+                        renderer.render_agent_output(bus_msg)
+                    elif bus_msg.type in ("tool_call", "tool_result", "error"):
+                        # Show tool/error output inline
+                        renderer.render_agent_output(bus_msg)
+                    elif bus_msg.type == "system":
+                        renderer.render_agent_output(bus_msg)
+
+                # Restart output reader
+                output_future = asyncio.ensure_future(
+                    message_bus.get_next_output(output_queue, timeout=0.15)
+                )
+
+    finally:
+        orchestrator.stop()
+        worker_loop_task.cancel()
+        try:
+            await worker_loop_task
+        except asyncio.CancelledError:
+            pass
+
+    # -- Cleanup ------------------------------------------------------
+    orchestrator.end_sessions()
+    dream.increment_sessions()
+
     if dream.should_dream():
         if use_rich:
             console.print("[dim]Running dream cycle...[/dim]")
@@ -558,6 +833,8 @@ async def _handle_command(
         help_text = f"""
 Available commands (v{__version__}):
   /model [name]       - Show or switch LLM provider
+  /agents             - Show agent pool status (multi-agent)
+  /bg <message>       - Send task to worker agent (multi-agent)
   /dream              - Run dream cycle (memory consolidation)
   /memory             - Show memory stats and index
   /tools              - List all registered tools

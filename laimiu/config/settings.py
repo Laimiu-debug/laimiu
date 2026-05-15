@@ -75,6 +75,22 @@ class AdaptationConfig(BaseModel):
     model: str = "ollama"
 
 
+class AgentRoleConfig(BaseModel):
+    """Configuration for a single agent role."""
+
+    provider: str = "deepseek"
+    role: str = "brain"           # brain | worker | specialist
+    router_task: str = "chat"     # chat | cheap | dream
+    enabled: bool = True
+
+
+class MultiAgentConfig(BaseModel):
+    """Multi-agent orchestration configuration."""
+
+    enabled: bool = False
+    agents: dict[str, AgentRoleConfig] = Field(default_factory=dict)
+
+
 class LaimiuConfig(BaseModel):
     """Root configuration for Laimiu."""
 
@@ -84,6 +100,7 @@ class LaimiuConfig(BaseModel):
     procedural: ProceduralConfig = Field(default_factory=ProceduralConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     adaptation: AdaptationConfig = Field(default_factory=AdaptationConfig)
+    multi_agent: MultiAgentConfig = Field(default_factory=MultiAgentConfig)
 
     @classmethod
     def load(cls, path: Path) -> LaimiuConfig:
