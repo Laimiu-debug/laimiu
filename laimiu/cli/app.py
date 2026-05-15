@@ -239,9 +239,19 @@ async def _run_chat(config: LaimiuConfig) -> None:
                     # Show thinking indicator
                     live.update(Text("Thinking...", style="dim italic"))
                     full_response = ""
-                    async for chunk in agent.run(user_input):
-                        full_response += chunk
-                        live.update(Markdown(full_response))
+                    async for msg in agent.run(user_input):
+                        if msg.type == "content":
+                            full_response += msg.content
+                            live.update(Markdown(full_response))
+                        elif msg.type == "thinking":
+                            # Show thinking as dim text (overwritten by content later)
+                            pass
+                        elif msg.type == "tool_call":
+                            live.update(Text(f"  Calling {msg.content}...", style="dim yellow"))
+                        elif msg.type == "tool_result":
+                            status = "OK" if msg.metadata.get("success") else "FAIL"
+                            elapsed = msg.metadata.get("elapsed_ms", 0)
+                            live.update(Text(f"  {msg.content} [{status}] {elapsed:.0f}ms", style="dim"))
                     # Final render
                     if full_response:
                         live.update(Markdown(full_response))
@@ -250,9 +260,18 @@ async def _run_chat(config: LaimiuConfig) -> None:
                 console.print()
             else:
                 print("Thinking...", flush=True)
-                async for chunk in agent.run(user_input):
-                    print(chunk, end="", flush=True)
-                print()
+                full_response = ""
+                async for msg in agent.run(user_input):
+                    if msg.type == "content":
+                        print(msg.content, end="", flush=True)
+                        full_response += msg.content
+                    elif msg.type == "tool_call":
+                        print(f"  [Calling {msg.content}...]", flush=True)
+                    elif msg.type == "tool_result":
+                        status = "OK" if msg.metadata.get("success") else "FAIL"
+                        print(f"  [{msg.content} {status}]", flush=True)
+                if full_response:
+                    print()
 
         except KeyboardInterrupt:
             print()

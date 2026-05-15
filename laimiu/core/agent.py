@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any, AsyncIterator
 
 from laimiu.config.settings import LaimiuConfig
 from laimiu.constants import SOUL_FILE
 from laimiu.core.context import ContextManager
+from laimiu.core.messages import OutputMessage
 from laimiu.core.prompt import build_system_prompt, load_soul
 from laimiu.core.reflection import Reflection, ReflectionResult
 from laimiu.core.tool_executor import ToolExecutor
@@ -81,15 +83,10 @@ class AgentLoop:
         self.memory.end_session()
         self._session_id = None
 
-    async def run(self, user_message: str) -> AsyncIterator[str]:
-        """Process a user message and stream the response.
-
-        Yields text chunks as they arrive from the LLM.
-        """
-        # Add user message to conversation
+    async def run(self, user_message: str) -> AsyncIterator[OutputMessage]:
+        """Process a user message and stream structured output messages."""
         self.conversation.append(Message(role="user", content=user_message))
 
-        # Build system prompt
         system_prompt = build_system_prompt(
             soul=self.soul,
             memory_index=self.memory.get_index(),
@@ -99,13 +96,9 @@ class AgentLoop:
             model_name=self._model_name,
         )
 
-        # Build messages within token budget
         messages = self.context_manager.build_messages(system_prompt, self.conversation)
-
-        # Get LLM tools spec
         openai_tools = self.tools.get_openai_tools()
 
-        # Agent loop
         self._tools_used_this_turn = []
         full_response = ""
         _chunk_count = 0
@@ -116,7 +109,6 @@ class AgentLoop:
             accumulated_tool_calls: list[dict[str, Any]] = []
             accumulated_reasoning = ""
 
-            # Stream from LLM
             provider = self.router.get_provider("chat")
             stream = provider.chat(messages, tools=openai_tools if openai_tools else None, stream=True)
 
@@ -124,16 +116,17 @@ class AgentLoop:
                 if not isinstance(chunk, StreamChunk):
                     continue
 
-                # Accumulate content
+                if chunk.reasoning_content:
+                    accumulated_reasoning += chunk.reasoning_content
+                    yield OutputMessage.thinking(chunk.reasoning_content)
+
                 if chunk.content:
                     accumulated_content += chunk.content
-                    yield chunk.content
+                    yield OutputMessage.content_chunk(chunk.content)
 
-                    # Sentence-level repetition detection (every 30 chunks)
                     _chunk_count += 1
                     if _chunk_count % 30 == 0 and len(accumulated_content) > 200:
                         tail = accumulated_content[-500:]
-                        # Check if last 40 chars appear 3+ times in recent text
                         pattern = tail[-40:]
                         if tail.count(pattern) >= 3:
                             logger.warning(
@@ -142,21 +135,14 @@ class AgentLoop:
                             )
                             break
 
-                # Collect complete tool calls (delivered on finish_reason)
                 if chunk.tool_calls:
                     accumulated_tool_calls = chunk.tool_calls
 
-                # Accumulate reasoning content from thinking models
-                if chunk.reasoning_content:
-                    accumulated_reasoning += chunk.reasoning_content
-
-                # Check if done
                 if chunk.finish_reason in ("stop", "tool_calls"):
                     break
 
             # Handle tool calls
             if accumulated_tool_calls:
-                # Parse tool calls from the complete data
                 tool_calls = []
                 for tc_data in accumulated_tool_calls:
                     fn = tc_data.get("function", {})
@@ -171,7 +157,6 @@ class AgentLoop:
                         arguments=args,
                     ))
 
-                # Add assistant message with tool calls to conversation
                 assistant_tc_dicts = []
                 for tc in tool_calls:
                     assistant_tc_dicts.append({
@@ -184,21 +169,24 @@ class AgentLoop:
                     })
                 self.conversation.append(Message(
                     role="assistant",
-                    content=accumulated_content,
+                    content=accumulated_content or " ",
                     tool_calls=assistant_tc_dicts,
                     reasoning_content=accumulated_reasoning or None,
                 ))
 
-                # Execute each tool call
                 for tc in tool_calls:
-                    result = await self.tool_executor.execute(tc)
+                    yield OutputMessage.tool_call_start(tc.name, tc.arguments)
 
-                    # Reflect on result
+                    t0 = time.perf_counter()
+                    result = await self.tool_executor.execute(tc)
+                    elapsed_ms = (time.perf_counter() - t0) * 1000
+
+                    yield OutputMessage.tool_call_end(tc.name, elapsed_ms, result.success)
+
                     reflection_result = self.reflection.evaluate(
                         tc.name, tc.arguments, result, user_message
                     )
 
-                    # Track for procedural memory
                     if self.procedural_tracker:
                         self.procedural_tracker.record(
                             tc.name, tc.arguments, result, reflection_result
@@ -210,11 +198,9 @@ class AgentLoop:
                         "reflection_confidence": reflection_result.confidence,
                     })
 
-                    # If failed and has alternative, retry
                     if reflection_result.should_retry and reflection_result.alternative_approach:
                         logger.info(f"Retrying with alternative: {reflection_result.alternative_approach}")
 
-                    # Add tool result to conversation
                     self.conversation.append(Message(
                         role="tool",
                         content=result.to_text(),
@@ -222,25 +208,19 @@ class AgentLoop:
                         name=tc.name,
                     ))
 
-                # Rebuild messages and continue loop
-                messages = self.context_manager.build_messages(
-                    system_prompt, self.conversation
-                )
+                messages = self.context_manager.build_messages(system_prompt, self.conversation)
                 accumulated_content = ""
-                continue  # Next iteration to get LLM response to tool results
+                continue
 
             else:
-                # No tool calls - we're done
                 full_response = accumulated_content
-                # CRITICAL: add assistant response to conversation history
                 self.conversation.append(Message(
                     role="assistant",
-                    content=accumulated_content,
+                    content=accumulated_content or " ",
                     reasoning_content=accumulated_reasoning or None,
                 ))
                 break
 
-        # Save turn to memory
         if full_response or self._tools_used_this_turn:
             self.memory.save_turn(
                 user_message=user_message,
@@ -251,16 +231,15 @@ class AgentLoop:
     async def run_complete(self, user_message: str) -> str:
         """Non-streaming version - returns full response."""
         chunks = []
-        async for chunk in self.run(user_message):
-            chunks.append(chunk)
+        async for msg in self.run(user_message):
+            if msg.type in ("content", "thinking"):
+                chunks.append(msg.content)
         return "".join(chunks)
 
     def get_tools_used(self) -> list[dict[str, Any]]:
-        """Get tools used in the current session."""
         return self.tool_executor.get_call_log()
 
     def get_stats(self) -> dict[str, Any]:
-        """Get current session stats."""
         return {
             "iterations": self.iterations,
             "max_iterations": self.max_iterations,

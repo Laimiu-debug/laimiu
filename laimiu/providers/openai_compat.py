@@ -32,7 +32,9 @@ def _to_openai_messages(messages: list[Message]) -> list[dict[str, Any]]:
             d["name"] = msg.name
         # DeepSeek thinking mode: must pass reasoning_content back
         if msg.reasoning_content:
-            d["reasoning_content"] = msg.reasoning_content
+            # Sanitize: remove surrogate characters that cause encoding errors
+            cleaned = msg.reasoning_content.encode("utf-8", errors="replace").decode("utf-8")
+            d["reasoning_content"] = cleaned
         result.append(d)
     return result
 
@@ -130,6 +132,8 @@ class OpenAICompatProvider:
                 # Capture reasoning_content from DeepSeek thinking mode
                 reasoning = getattr(delta, "reasoning_content", None) or ""
                 if reasoning:
+                    # Sanitize surrogates
+                    reasoning = reasoning.encode("utf-8", errors="replace").decode("utf-8")
                     accumulated_reasoning += reasoning
 
                 # Accumulate tool call deltas
