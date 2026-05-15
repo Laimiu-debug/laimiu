@@ -301,7 +301,7 @@ class Guardian:
             if os.environ.get("DEEPSEEK_API_KEY"):
                 models["deepseek"] = ProviderModelConfig(
                     base_url="https://api.deepseek.com",
-                    model="deepseek-v4-flash",
+                    model="deepseek-v4-pro",
                     api_key=os.environ["DEEPSEEK_API_KEY"],
                 )
                 config.provider.default = "deepseek"

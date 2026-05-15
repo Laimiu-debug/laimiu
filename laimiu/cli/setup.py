@@ -32,7 +32,7 @@ class SetupWizard:
                 "label": "DeepSeek",
                 "config": ProviderModelConfig(
                     base_url="https://api.deepseek.com",
-                    model="deepseek-v4-flash",
+                    model="deepseek-v4-pro",
                 ),
                 "needs_key": True,
                 "key_prompt": "Enter your DeepSeek API Key: ",

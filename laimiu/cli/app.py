@@ -69,7 +69,7 @@ You are Laimiu, a personal AI assistant that learns and evolves with your user.
             from laimiu.config.settings import ProviderModelConfig
             models["deepseek"] = ProviderModelConfig(
                 base_url="https://api.deepseek.com",
-                model="deepseek-v4-flash",
+                model="deepseek-v4-pro",
                 api_key=os.environ["DEEPSEEK_API_KEY"],
             )
             config.provider.default = "deepseek"
