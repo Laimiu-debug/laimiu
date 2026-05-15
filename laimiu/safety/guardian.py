@@ -301,21 +301,21 @@ class Guardian:
             if os.environ.get("DEEPSEEK_API_KEY"):
                 models["deepseek"] = ProviderModelConfig(
                     base_url="https://api.deepseek.com",
-                    model="deepseek-chat",
+                    model="deepseek-v4-flash",
                     api_key=os.environ["DEEPSEEK_API_KEY"],
                 )
                 config.provider.default = "deepseek"
             elif os.environ.get("OPENAI_API_KEY"):
                 models["glm"] = ProviderModelConfig(
                     base_url="https://open.bigmodel.cn/api/coding/paas/v4",
-                    model="GLM-4-Plus",
+                    model="glm-4.7-flashx",
                     api_key=os.environ["OPENAI_API_KEY"],
                 )
                 config.provider.default = "glm"
             else:
                 models["ollama"] = ProviderModelConfig(
                     base_url="http://localhost:11434/v1",
-                    model="llama3",
+                    model="llama3.1",
                     api_key="not-needed",
                 )
                 config.provider.default = "ollama"

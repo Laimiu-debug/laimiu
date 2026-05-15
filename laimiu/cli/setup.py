@@ -32,7 +32,7 @@ class SetupWizard:
                 "label": "DeepSeek",
                 "config": ProviderModelConfig(
                     base_url="https://api.deepseek.com",
-                    model="deepseek-chat",
+                    model="deepseek-v4-flash",
                 ),
                 "needs_key": True,
                 "key_prompt": "Enter your DeepSeek API Key: ",
@@ -43,7 +43,7 @@ class SetupWizard:
                 "label": "GLM / ZhiPu (智谱)",
                 "config": ProviderModelConfig(
                     base_url="https://open.bigmodel.cn/api/coding/paas/v4",
-                    model="GLM-4-Plus",
+                    model="glm-4.7-flashx",
                 ),
                 "needs_key": True,
                 "key_prompt": "Enter your ZhiPu API Key: ",
@@ -65,7 +65,7 @@ class SetupWizard:
                 "label": "Doubao / Volcengine (豆包/火山引擎)",
                 "config": ProviderModelConfig(
                     base_url="https://ark.cn-beijing.volces.com/api/v3",
-                    model="doubao-pro-32k",
+                    model="doubao-1.5-pro",
                 ),
                 "needs_key": True,
                 "key_prompt": "Enter your Volcengine API Key: ",
@@ -120,7 +120,7 @@ class SetupWizard:
                 "label": "SiliconFlow (硅基流动)",
                 "config": ProviderModelConfig(
                     base_url="https://api.siliconflow.cn/v1",
-                    model="Qwen/Qwen2.5-7B-Instruct",
+                    model="Qwen/Qwen3-8B",
                 ),
                 "needs_key": True,
                 "key_prompt": "Enter your SiliconFlow API Key: ",
@@ -131,7 +131,7 @@ class SetupWizard:
                 "label": "OpenAI",
                 "config": ProviderModelConfig(
                     base_url="https://api.openai.com/v1",
-                    model="gpt-4o-mini",
+                    model="gpt-4.1-mini",
                 ),
                 "needs_key": True,
                 "key_prompt": "Enter your OpenAI API Key: ",
@@ -142,7 +142,7 @@ class SetupWizard:
                 "label": "Ollama (local, no API Key needed)",
                 "config": ProviderModelConfig(
                     base_url="http://localhost:11434/v1",
-                    model="llama3",
+                    model="llama3.1",
                     api_key="not-needed",
                 ),
                 "needs_key": False,

@@ -69,7 +69,7 @@ You are Laimiu, a personal AI assistant that learns and evolves with your user.
             from laimiu.config.settings import ProviderModelConfig
             models["deepseek"] = ProviderModelConfig(
                 base_url="https://api.deepseek.com",
-                model="deepseek-chat",
+                model="deepseek-v4-flash",
                 api_key=os.environ["DEEPSEEK_API_KEY"],
             )
             config.provider.default = "deepseek"
@@ -78,7 +78,7 @@ You are Laimiu, a personal AI assistant that learns and evolves with your user.
             from laimiu.config.settings import ProviderModelConfig
             models["glm"] = ProviderModelConfig(
                 base_url="https://open.bigmodel.cn/api/coding/paas/v4",
-                model="GLM-4-Plus",
+                model="glm-4.7-flashx",
                 api_key=os.environ["OPENAI_API_KEY"],
             )
             if not models.get("deepseek"):
@@ -89,7 +89,7 @@ You are Laimiu, a personal AI assistant that learns and evolves with your user.
             from laimiu.config.settings import ProviderModelConfig
             models["ollama"] = ProviderModelConfig(
                 base_url="http://localhost:11434/v1",
-                model="llama3",
+                model="llama3.1",
                 api_key="not-needed",
             )
             config.provider.default = "ollama"

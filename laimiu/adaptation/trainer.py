@@ -29,7 +29,7 @@ class QLoRATrainer:
     def train(
         self,
         dataset_path: str,
-        base_model: str = "llama3",
+        base_model: str = "llama3.1",
         output_dir: str | None = None,
         epochs: int = 3,
         learning_rate: float = 2e-4,
