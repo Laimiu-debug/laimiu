@@ -103,6 +103,8 @@ def _print_banner(config: LaimiuConfig, agent: AgentLoop, memory: MemoryManager)
     try:
         from rich.console import Console
         from rich.panel import Panel
+        from rich.rule import Rule
+        from rich.table import Table
         from rich.text import Text
 
         console = Console()
@@ -117,17 +119,28 @@ def _print_banner(config: LaimiuConfig, agent: AgentLoop, memory: MemoryManager)
         builtin_count = len([t for t in agent.tools.list_tools()])
         stats = memory.get_stats()
 
-        banner_text = Text()
-        banner_text.append(f"Laimiu v{__version__}\n", style="bold cyan")
-        banner_text.append(f"Model: ", style="dim")
-        banner_text.append(f"{provider_name}/{model_name}\n", style="green")
-        banner_text.append(f"Tools: ", style="dim")
-        banner_text.append(f"{builtin_count} registered", style="yellow")
-        banner_text.append(f" | ", style="dim")
-        banner_text.append(f"Memory: ", style="dim")
-        banner_text.append(f"{stats.get('vector_notes', 0)} notes", style="magenta")
+        banner = Table(show_header=False, box=None, padding=(0, 2))
+        banner.add_row(
+            Text("Laimiu", style="bold cyan"),
+            Text(f"v{__version__}", style="dim"),
+        )
+        banner.add_row(
+            Text("Model", style="dim"),
+            Text(f"{provider_name}/{model_name}", style="green"),
+        )
+        banner.add_row(
+            Text("Tools", style="dim"),
+            Text(f"{builtin_count} registered", style="yellow"),
+        )
+        banner.add_row(
+            Text("Memory", style="dim"),
+            Text(f"{stats.get('vector_notes', 0)} notes", style="magenta"),
+        )
 
-        console.print(Panel(banner_text, border_style="cyan", padding=(1, 2)))
+        console.print()
+        console.print(Rule(style="cyan"))
+        console.print(Panel(banner, border_style="cyan", padding=(0, 1)))
+        console.print(Rule(style="cyan"))
     except ImportError:
         print(f"Laimiu v{__version__}")
         print(f"Model: {config.provider.default}")
@@ -138,8 +151,6 @@ async def _run_chat(config: LaimiuConfig) -> None:
     """Main chat loop."""
     try:
         from rich.console import Console
-        from rich.markdown import Markdown
-        from rich.live import Live
         from prompt_toolkit import PromptSession
         from prompt_toolkit.history import FileHistory
         from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
@@ -187,6 +198,10 @@ async def _run_chat(config: LaimiuConfig) -> None:
     # Guardian for health checks
     guardian = Guardian()
 
+    # Renderer
+    from laimiu.cli.renderer import ChatRenderer
+    renderer = ChatRenderer(console) if use_rich else None
+
     # Print banner
     if use_rich:
         _print_banner(config, agent, memory)
@@ -199,10 +214,23 @@ async def _run_chat(config: LaimiuConfig) -> None:
     # Start session
     session_id = agent.start_session()
 
-    # Prompt session
+    # Status bar info
+    provider_name = config.provider.default
+    model_name = "?"
+    if config.provider.models.get(provider_name):
+        model_name = config.provider.models[provider_name].model
+    tool_count = len(agent.tools.list_tools())
+
+    def _status_bar():
+        return f" Laimiu v{__version__} | {provider_name}/{model_name} | {tool_count} tools | /help "
+
+    # Prompt session with status bar
     history_file = LAIMIU_HOME / "chat_history"
     if use_rich:
-        session = PromptSession(history=FileHistory(str(history_file)))
+        session = PromptSession(
+            history=FileHistory(str(history_file)),
+            bottom_toolbar=_status_bar,
+        )
     else:
         session = None
 
@@ -231,34 +259,11 @@ async def _run_chat(config: LaimiuConfig) -> None:
                     break
                 continue
 
-            # Regular chat
-            if use_rich:
-                from rich.text import Text
-
-                with Live(console=console, refresh_per_second=10, vertical_overflow="visible") as live:
-                    # Show thinking indicator
-                    live.update(Text("Thinking...", style="dim italic"))
-                    full_response = ""
-                    async for msg in agent.run(user_input):
-                        if msg.type == "content":
-                            full_response += msg.content
-                            live.update(Markdown(full_response))
-                        elif msg.type == "thinking":
-                            # Show thinking as dim text (overwritten by content later)
-                            pass
-                        elif msg.type == "tool_call":
-                            live.update(Text(f"  Calling {msg.content}...", style="dim yellow"))
-                        elif msg.type == "tool_result":
-                            status = "OK" if msg.metadata.get("success") else "FAIL"
-                            elapsed = msg.metadata.get("elapsed_ms", 0)
-                            live.update(Text(f"  {msg.content} [{status}] {elapsed:.0f}ms", style="dim"))
-                    # Final render
-                    if full_response:
-                        live.update(Markdown(full_response))
-                    else:
-                        live.update(Text("(no response)", style="dim"))
-                console.print()
+            # Regular chat — use structured renderer
+            if renderer:
+                await renderer.render_turn(user_input, agent)
             else:
+                # Fallback: plain text
                 print("Thinking...", flush=True)
                 full_response = ""
                 async for msg in agent.run(user_input):
@@ -272,6 +277,7 @@ async def _run_chat(config: LaimiuConfig) -> None:
                         print(f"  [{msg.content} {status}]", flush=True)
                 if full_response:
                     print()
+                print("-" * 40)
 
         except KeyboardInterrupt:
             print()
