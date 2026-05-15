@@ -2,17 +2,45 @@
 
 from __future__ import annotations
 
+import builtins
 import sys
 import traceback
 from io import StringIO
+from pathlib import Path
 from typing import Any
 
 from laimiu.tools.base import BaseTool, ToolResult
 
 
+def _make_safe_open() -> Any:
+    """Create an open() wrapper that blocks writes to Laimiu source files."""
+    _real_open = builtins.open
+
+    # Resolve source dir once
+    import laimiu as _pkg
+    _src_dir = str(Path(_pkg.__file__).parent.resolve())
+    _project_root = str(Path(_pkg.__file__).parent.parent.resolve())
+
+    def safe_open(file, mode="r", *args, **kwargs):
+        # Block write modes to source files
+        if isinstance(file, (str, Path)):
+            resolved = str(Path(file).resolve())
+            # Protect laimiu/*.py source and pyproject.toml
+            if resolved.startswith(_src_dir) and resolved.endswith(".py") and ("w" in mode or "a" in mode):
+                raise PermissionError(
+                    f"Cannot write to Laimiu source: {file}. "
+                    f"You can write to any other file."
+                )
+            if resolved == str(Path(_project_root) / "pyproject.toml") and ("w" in mode or "a" in mode):
+                raise PermissionError("Cannot write to pyproject.toml from sandbox.")
+        return _real_open(file, mode, *args, **kwargs)
+
+    return safe_open
+
+
 class CodeExecTool(BaseTool):
     name = "code_exec"
-    description = "Execute Python code in a restricted sandbox and return the output"
+    description = "Execute Python code in a sandbox and return the output. Supports imports."
     parameters = {
         "type": "object",
         "properties": {
@@ -34,52 +62,53 @@ class CodeExecTool(BaseTool):
         if not code:
             return ToolResult(success=False, error="No code provided")
 
-        # Safety check: block dangerous operations
+        # Safety check: block explicitly dangerous patterns
         from laimiu.utils.safety import is_code_safe
 
         safe, reason = is_code_safe(code)
         if not safe:
             return ToolResult(success=False, error=f"Code blocked: {reason}")
 
-        # Execute in restricted namespace
+        # Build sandbox with __import__ for module access
         restricted_globals = {
             "__builtins__": {
+                # Core I/O
                 "print": print,
-                "len": len,
-                "range": range,
-                "str": str,
-                "int": int,
-                "float": float,
-                "list": list,
-                "dict": dict,
-                "tuple": tuple,
-                "set": set,
-                "bool": bool,
-                "abs": abs,
-                "min": min,
-                "max": max,
-                "sum": sum,
-                "sorted": sorted,
-                "enumerate": enumerate,
-                "zip": zip,
-                "map": map,
-                "filter": filter,
-                "isinstance": isinstance,
-                "type": type,
-                "hasattr": hasattr,
-                "getattr": getattr,
-                "repr": repr,
-                "round": round,
-                "any": any,
-                "all": all,
-                "open": open,  # Needed for file ops, safety checked above
-                "Exception": Exception,
-                "ValueError": ValueError,
-                "TypeError": TypeError,
-                "KeyError": KeyError,
-                "IndexError": IndexError,
-                "RuntimeError": RuntimeError,
-                "ImportError": ImportError,
+                "open": _make_safe_open(),  # Protected: can't write source files
+                # Types
+                "str": str, "int": int, "float": float, "bool": bool,
+                "list": list, "dict": dict, "tuple": tuple, "set": set,
+                "bytes": bytes, "bytearray": bytearray,
+                "type": type, "repr": repr, "format": format,
+                "isinstance": isinstance, "issubclass": issubclass,
+                "hasattr": hasattr, "getattr": getattr, "setattr": setattr,
+                # Import — the key unlock
+                "__import__": __import__,
+                # Math
+                "abs": abs, "min": min, "max": max, "sum": sum,
+                "round": round, "pow": pow, "sorted": sorted,
+                # Iteration
+                "range": range, "enumerate": enumerate, "zip": zip,
+                "map": map, "filter": filter, "reversed": reversed,
+                "iter": iter, "next": next, "slice": slice,
+                "any": any, "all": all,
+                # Conversion
+                "ord": ord, "chr": chr, "hex": hex, "oct": oct, "bin": bin,
+                "id": id, "hash": hash, "len": len,
+                # Object
+                "object": object, "super": super, "property": property,
+                "staticmethod": staticmethod, "classmethod": classmethod,
+                # Exceptions
+                "Exception": Exception, "ValueError": ValueError,
+                "TypeError": TypeError, "KeyError": KeyError,
+                "IndexError": IndexError, "RuntimeError": RuntimeError,
+                "ImportError": ImportError, "ModuleNotFoundError": ModuleNotFoundError,
+                "AttributeError": AttributeError, "NameError": NameError,
+                "FileNotFoundError": FileNotFoundError, "PermissionError": PermissionError,
+                "OSError": OSError, "TimeoutError": TimeoutError,
+                "StopIteration": StopIteration, "NotImplementedError": NotImplementedError,
+                # Constants
+                "True": True, "False": False, "None": None, "Ellipsis": Ellipsis,
             },
         }
         restricted_locals: dict[str, Any] = {}

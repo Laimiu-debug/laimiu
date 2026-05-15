@@ -33,18 +33,17 @@ DANGEROUS_COMMANDS = [
     "TRUNCATE",
 ]
 
-# Patterns forbidden in generated tools
+# Patterns forbidden in code execution — only truly destructive operations
+# Allow: __import__, exec, compile (needed for useful code execution)
+# Block: system-level destruction
 FORBIDDEN_CODE_PATTERNS = [
     "os.system(",
     "subprocess.call(",
     "subprocess.Popen(",
-    "__import__(",
-    "eval(",
-    "exec(",
-    "compile(",
+    "subprocess.run(",
     "rm -rf",
-    "os.remove(",
     "shutil.rmtree(",
+    "os.remove(",
 ]
 
 
