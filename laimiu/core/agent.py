@@ -108,11 +108,7 @@ class AgentLoop:
         # Agent loop
         self._tools_used_this_turn = []
         full_response = ""
-
-        # Repetition detection state
-        _last_chunks: list[str] = []
-        _repeat_count = 0
-        _max_repeats = 8  # Same text repeated 8+ times → stop
+        _chunk_count = 0
 
         while self.iterations < self.max_iterations:
             self.iterations += 1
@@ -132,18 +128,18 @@ class AgentLoop:
                     accumulated_content += chunk.content
                     yield chunk.content
 
-                    # Repetition detection: if same chunk repeats, cut off
-                    _last_chunks.append(chunk.content)
-                    if len(_last_chunks) > 5:
-                        _last_chunks.pop(0)
-                    if len(_last_chunks) >= 3:
-                        if len(set(_last_chunks)) == 1 and len(_last_chunks[-1]) > 10:
-                            _repeat_count += 1
-                            if _repeat_count >= _max_repeats:
-                                logger.warning("Repetition detected, stopping generation")
-                                break
-                        else:
-                            _repeat_count = 0
+                    # Sentence-level repetition detection (every 30 chunks)
+                    _chunk_count += 1
+                    if _chunk_count % 30 == 0 and len(accumulated_content) > 200:
+                        tail = accumulated_content[-500:]
+                        # Check if last 40 chars appear 3+ times in recent text
+                        pattern = tail[-40:]
+                        if tail.count(pattern) >= 3:
+                            logger.warning(
+                                f"Repetition detected: '{pattern[:30]}...' "
+                                f"appears {tail.count(pattern)} times, stopping"
+                            )
+                            break
 
                 # Collect complete tool calls (delivered on finish_reason)
                 if chunk.tool_calls:

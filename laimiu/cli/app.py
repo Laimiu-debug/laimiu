@@ -233,7 +233,11 @@ async def _run_chat(config: LaimiuConfig) -> None:
 
             # Regular chat
             if use_rich:
-                with Live(console=console, refresh_per_second=8, vertical_overflow="visible") as live:
+                from rich.text import Text
+
+                with Live(console=console, refresh_per_second=10, vertical_overflow="visible") as live:
+                    # Show thinking indicator
+                    live.update(Text("Thinking...", style="dim italic"))
                     full_response = ""
                     async for chunk in agent.run(user_input):
                         full_response += chunk
@@ -241,8 +245,11 @@ async def _run_chat(config: LaimiuConfig) -> None:
                     # Final render
                     if full_response:
                         live.update(Markdown(full_response))
+                    else:
+                        live.update(Text("(no response)", style="dim"))
                 console.print()
             else:
+                print("Thinking...", flush=True)
                 async for chunk in agent.run(user_input):
                     print(chunk, end="", flush=True)
                 print()

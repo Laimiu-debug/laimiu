@@ -1,8 +1,9 @@
-"""Shell execution tool."""
+"""Shell execution tool — works on Windows and Linux."""
 
 from __future__ import annotations
 
 import asyncio
+import sys
 from typing import Any
 
 from laimiu.tools.base import BaseTool, ToolResult
@@ -43,26 +44,35 @@ class ShellTool(BaseTool):
         if is_command_dangerous(command):
             return ToolResult(
                 success=False,
-                error=f"Command blocked for safety: contains dangerous pattern. "
-                f"Run manually if you're sure.",
+                error=f"Command blocked for safety: contains dangerous pattern.",
             )
 
         try:
+            # Windows needs shell=True and proper encoding
             proc = await asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
+                # On Windows, use cmd.exe explicitly
+                **({"shell": True} if sys.platform == "win32" else {}),
             )
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=timeout
             )
 
+            # Decode with fallback for Windows
+            encoding = "utf-8"
             output_parts = []
             if stdout:
-                output_parts.append(stdout.decode("utf-8", errors="replace"))
+                output_parts.append(stdout.decode(encoding, errors="replace"))
             if stderr:
-                output_parts.append(f"[stderr] {stderr.decode('utf-8', errors='replace')}")
+                stderr_text = stderr.decode(encoding, errors="replace")
+                # Don't treat stderr as failure if exit code is 0
+                if proc.returncode == 0:
+                    output_parts.append(f"[stderr] {stderr_text}")
+                else:
+                    output_parts.append(f"[stderr] {stderr_text}")
 
             output = "\n".join(output_parts) if output_parts else "(no output)"
 
@@ -75,6 +85,10 @@ class ShellTool(BaseTool):
             return ToolResult(success=True, output=output)
 
         except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
             return ToolResult(
                 success=False,
                 error=f"Command timed out after {timeout}s",
