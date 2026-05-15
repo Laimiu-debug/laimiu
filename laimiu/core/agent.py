@@ -114,6 +114,7 @@ class AgentLoop:
             self.iterations += 1
             accumulated_content = ""
             accumulated_tool_calls: list[dict[str, Any]] = []
+            accumulated_reasoning = ""
 
             # Stream from LLM
             provider = self.router.get_provider("chat")
@@ -144,6 +145,10 @@ class AgentLoop:
                 # Collect complete tool calls (delivered on finish_reason)
                 if chunk.tool_calls:
                     accumulated_tool_calls = chunk.tool_calls
+
+                # Accumulate reasoning content from thinking models
+                if chunk.reasoning_content:
+                    accumulated_reasoning += chunk.reasoning_content
 
                 # Check if done
                 if chunk.finish_reason in ("stop", "tool_calls"):
@@ -181,6 +186,7 @@ class AgentLoop:
                     role="assistant",
                     content=accumulated_content,
                     tool_calls=assistant_tc_dicts,
+                    reasoning_content=accumulated_reasoning or None,
                 ))
 
                 # Execute each tool call
@@ -230,6 +236,7 @@ class AgentLoop:
                 self.conversation.append(Message(
                     role="assistant",
                     content=accumulated_content,
+                    reasoning_content=accumulated_reasoning or None,
                 ))
                 break
 

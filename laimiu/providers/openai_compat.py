@@ -30,6 +30,9 @@ def _to_openai_messages(messages: list[Message]) -> list[dict[str, Any]]:
             d["tool_call_id"] = msg.tool_call_id
         if msg.name:
             d["name"] = msg.name
+        # DeepSeek thinking mode: must pass reasoning_content back
+        if msg.reasoning_content:
+            d["reasoning_content"] = msg.reasoning_content
         result.append(d)
     return result
 
@@ -114,6 +117,7 @@ class OpenAICompatProvider:
         if stream:
             # Collect tool call deltas across chunks
             tool_call_buffers: dict[int, dict[str, str]] = {}
+            accumulated_reasoning = ""
 
             async for chunk in response:
                 if not chunk.choices:
@@ -122,6 +126,11 @@ class OpenAICompatProvider:
                 delta = choice.delta
 
                 content = delta.content or ""
+
+                # Capture reasoning_content from DeepSeek thinking mode
+                reasoning = getattr(delta, "reasoning_content", None) or ""
+                if reasoning:
+                    accumulated_reasoning += reasoning
 
                 # Accumulate tool call deltas
                 if delta.tool_calls:
@@ -161,6 +170,7 @@ class OpenAICompatProvider:
                         content=content,
                         tool_calls=complete_tc if complete_tc else None,
                         finish_reason=choice.finish_reason,
+                        reasoning_content=accumulated_reasoning,
                     )
                     # Reset buffers for potential multi-turn tool calls
                     tool_call_buffers.clear()

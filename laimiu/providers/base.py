@@ -39,6 +39,7 @@ class Message:
     tool_calls: list[dict[str, Any]] | None = None
     tool_call_id: str | None = None
     name: str | None = None
+    reasoning_content: str | None = None  # DeepSeek thinking mode
 
 
 @dataclass
@@ -57,6 +58,7 @@ class StreamChunk:
     content: str = ""
     tool_calls: list[dict[str, Any]] | None = None
     finish_reason: str | None = None
+    reasoning_content: str = ""  # DeepSeek thinking mode
 
 
 @dataclass
