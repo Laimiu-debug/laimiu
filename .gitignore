@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Node
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude / Codex
+.claude/
+.codex/
+.codex_tmp_pkg/
+.playwright-cli/
+
+# Runtime data (user-specific, not for repo)
+.laimiu/
+
+# Other projects in this directory
+hermes-frontend/
+valuecell-main/
+weldlayer/
+final trade/
