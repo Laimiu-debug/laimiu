@@ -31,7 +31,7 @@ logger = logging.getLogger("laimiu.cli")
 
 def _is_first_run() -> bool:
     """Check if this is the first time Laimiu is being run."""
-    return not LAIMIU_HOME.exists() or not any(LAIMIU_HOME.iterdir())
+    return not CONFIG_FILE.exists()
 
 
 def _init_runtime() -> None:
