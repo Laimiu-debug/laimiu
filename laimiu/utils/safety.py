@@ -79,3 +79,27 @@ def sanitize_path(path: str, allowed_roots: list[str] | None = None) -> bool:
         if str(resolved).startswith(sd):
             return False
     return True
+
+
+def is_source_write_protected(path: str) -> bool:
+    """Check if a path is inside Laimiu's own source directory — should not be modified at runtime.
+
+    Only protects: laimiu/**/*.py and pyproject.toml.
+    Everything else (memory.md, ~/.laimiu/, etc.) is fair game.
+    """
+    from pathlib import Path
+
+    resolved = str(Path(path).resolve())
+
+    # Protect the laimiu package source directory (*.py files only)
+    import laimiu
+    laimiu_src = str(Path(laimiu.__file__).parent.resolve())
+    if resolved.startswith(laimiu_src) and resolved.endswith(".py"):
+        return True
+
+    # Protect the project root pyproject.toml
+    project_dir = str(Path(laimiu.__file__).parent.parent.resolve())
+    if resolved == str(Path(project_dir) / "pyproject.toml"):
+        return True
+
+    return False

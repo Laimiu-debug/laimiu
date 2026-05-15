@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from laimiu.tools.base import BaseTool, ToolResult
-from laimiu.utils.safety import sanitize_path
+from laimiu.utils.safety import sanitize_path, is_source_write_protected
 
 
 class ReadFileTool(BaseTool):
@@ -103,6 +103,12 @@ class WriteFileTool(BaseTool):
             return ToolResult(success=False, error="No path provided")
         if not sanitize_path(path):
             return ToolResult(success=False, error="Path not allowed")
+        if is_source_write_protected(path):
+            return ToolResult(
+                success=False,
+                error="Cannot write to Laimiu's own *.py source files or pyproject.toml. "
+                      "You can write to any other file: config, data, docs, scripts, etc.",
+            )
 
         file_path = Path(path)
         try:
