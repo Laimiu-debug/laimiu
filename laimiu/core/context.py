@@ -110,26 +110,67 @@ class ContextManager:
         return messages
 
     def _sanitize_conversation(self, messages: list[Message]) -> list[Message]:
-        """Remove orphaned tool messages that would cause API errors.
+        """Sanitize conversation to prevent API 400 errors.
 
-        A 'tool' role message is only valid if the previous message is an
-        assistant message with tool_calls. Otherwise the API returns 400.
+        Rules enforced:
+        1. tool messages must follow an assistant message with tool_calls
+        2. Every tool_call_id in assistant.tool_calls MUST have a matching tool response
+        3. Orphaned tool messages (no preceding assistant+tool_calls) are dropped
+        4. If an assistant has tool_calls but missing tool responses, add placeholder
         """
         if not messages:
             return messages
 
         result = []
-        for i, msg in enumerate(messages):
+        i = 0
+        while i < len(messages):
+            msg = messages[i]
+
             if msg.role == "tool":
-                # Check if previous message is assistant with tool_calls
+                # Rule 1 & 3: tool message must follow assistant+tool_calls
                 if result and result[-1].role == "assistant" and result[-1].tool_calls:
                     result.append(msg)
                 else:
-                    # Orphaned tool message — drop it
                     logger.debug(f"Dropping orphaned tool message at index {i}")
-            else:
-                # If assistant with tool_calls, make sure we don't have
-                # consecutive assistant+tool_calls without following tool results
+                i += 1
+
+            elif msg.role == "assistant" and msg.tool_calls:
+                # This assistant has tool_calls — check if all responses exist
                 result.append(msg)
+
+                # Collect all tool_call_ids that need responses
+                expected_ids = {tc.get("id") for tc in msg.tool_calls if tc.get("id")}
+                responded_ids = set()
+
+                # Look ahead for tool responses
+                j = i + 1
+                tool_msgs = []
+                while j < len(messages) and messages[j].role == "tool":
+                    tool_msgs.append(messages[j])
+                    j += 1
+
+                # Add tool messages that match expected ids
+                for tm in tool_msgs:
+                    if tm.tool_call_id in expected_ids:
+                        result.append(tm)
+                        responded_ids.add(tm.tool_call_id)
+                    else:
+                        logger.debug(f"Dropping unmatched tool message for id {tm.tool_call_id}")
+
+                # Rule 4: add placeholder responses for missing tool_call_ids
+                missing_ids = expected_ids - responded_ids
+                for missing_id in missing_ids:
+                    logger.warning(f"Adding placeholder tool response for missing id {missing_id}")
+                    result.append(Message(
+                        role="tool",
+                        content="(tool execution was interrupted - no result available)",
+                        tool_call_id=missing_id,
+                    ))
+
+                i = j  # skip past all tool messages we already processed
+
+            else:
+                result.append(msg)
+                i += 1
 
         return result
