@@ -1,13 +1,42 @@
-"""Shell execution tool — works on Windows and Linux."""
+"""Shell execution tool — works on Windows and Linux.
+
+Uses subprocess.Popen wrapped in run_in_executor for cross-platform reliability.
+Avoids asyncio.create_subprocess_shell issues on Windows.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import sys
 from typing import Any
 
 from laimiu.tools.base import BaseTool, ToolResult
 from laimiu.utils.safety import is_command_dangerous
+
+
+def _run_command(command: str, timeout: int, cwd: str | None) -> tuple[int, str, str]:
+    """Run a shell command synchronously and return (returncode, stdout, stderr)."""
+    import subprocess as _sp
+    proc = _sp.Popen(
+        command,
+        shell=True,
+        stdout=_sp.PIPE,
+        stderr=_sp.PIPE,
+        cwd=cwd,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except _sp.TimeoutExpired:
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        return -1, stdout.decode("utf-8", errors="replace"), "Command timed out"
+
+    return (
+        proc.returncode,
+        stdout.decode("utf-8", errors="replace") if stdout else "",
+        stderr.decode("utf-8", errors="replace") if stderr else "",
+    )
 
 
 class ShellTool(BaseTool):
@@ -44,54 +73,39 @@ class ShellTool(BaseTool):
         if is_command_dangerous(command):
             return ToolResult(
                 success=False,
-                error=f"Command blocked for safety: contains dangerous pattern.",
+                error="Command blocked for safety: contains dangerous pattern.",
             )
 
         try:
-            # Windows needs shell=True and proper encoding
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=cwd,
-                # On Windows, use cmd.exe explicitly
-                **({"shell": True} if sys.platform == "win32" else {}),
-            )
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
+            loop = asyncio.get_running_loop()
+            returncode, stdout, stderr = await loop.run_in_executor(
+                None, _run_command, command, timeout, cwd
             )
 
-            # Decode with fallback for Windows
-            encoding = "utf-8"
             output_parts = []
             if stdout:
-                output_parts.append(stdout.decode(encoding, errors="replace"))
+                output_parts.append(stdout)
             if stderr:
-                stderr_text = stderr.decode(encoding, errors="replace")
-                # Don't treat stderr as failure if exit code is 0
-                if proc.returncode == 0:
-                    output_parts.append(f"[stderr] {stderr_text}")
+                if returncode == 0:
+                    output_parts.append(f"[stderr] {stderr}")
                 else:
-                    output_parts.append(f"[stderr] {stderr_text}")
+                    output_parts.append(f"[stderr] {stderr}")
 
             output = "\n".join(output_parts) if output_parts else "(no output)"
 
-            if proc.returncode != 0:
+            if returncode != 0:
+                if "timed out" in stderr:
+                    return ToolResult(
+                        success=False,
+                        output=output,
+                        error=f"Command timed out after {timeout}s",
+                    )
                 return ToolResult(
                     success=False,
                     output=output,
-                    error=f"Exit code: {proc.returncode}",
+                    error=f"Exit code: {returncode}",
                 )
             return ToolResult(success=True, output=output)
 
-        except asyncio.TimeoutError:
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
-            return ToolResult(
-                success=False,
-                error=f"Command timed out after {timeout}s",
-            )
         except Exception as e:
             return ToolResult(success=False, error=str(e))

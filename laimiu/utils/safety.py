@@ -58,8 +58,20 @@ def is_code_safe(source: str) -> tuple[bool, str]:
 
     Returns (is_safe, reason).
     """
+    # Decode base64 payloads before checking patterns
+    import base64
+    import re
+    decoded_source = source
+    b64_pattern = re.compile(r'base64\.b64decode\(["\']([A-Za-z0-9+/=]+)["\']\)')
+    for match in b64_pattern.finditer(source):
+        try:
+            decoded = base64.b64decode(match.group(1)).decode("utf-8", errors="replace")
+            decoded_source += "\n" + decoded
+        except Exception:
+            pass
+
     for pattern in FORBIDDEN_CODE_PATTERNS:
-        if pattern in source:
+        if pattern in source or pattern in decoded_source:
             return False, f"Forbidden pattern found: {pattern}"
     return True, "OK"
 
@@ -81,22 +93,36 @@ def sanitize_path(path: str, allowed_roots: list[str] | None = None) -> bool:
 
 
 def is_source_write_protected(path: str) -> bool:
-    """Check if a path is inside Laimiu's own source directory — should not be modified at runtime.
+    """Check if a path is a critical boot file that should not be modified.
 
-    Only protects: laimiu/**/*.py and pyproject.toml.
-    Everything else (memory.md, ~/.laimiu/, etc.) is fair game.
+    Only protects the minimum files needed for Laimiu to start.
+    Everything else (tools, dream, memory, etc.) can be modified for self-evolution.
     """
     from pathlib import Path
 
     resolved = str(Path(path).resolve())
 
-    # Protect the laimiu package source directory (*.py files only)
     import laimiu
     laimiu_src = str(Path(laimiu.__file__).parent.resolve())
-    if resolved.startswith(laimiu_src) and resolved.endswith(".py"):
+
+    # Only protect critical boot files
+    protected_files = {
+        str(Path(laimiu_src) / "__init__.py"),
+        str(Path(laimiu_src) / "__main__.py"),
+        str(Path(laimiu_src) / "constants.py"),
+        str(Path(laimiu_src) / "bootstrap.py"),
+        str(Path(laimiu_src) / "config" / "settings.py"),
+        str(Path(laimiu_src) / "cli" / "app.py"),
+        str(Path(laimiu_src) / "cli" / "setup.py"),
+        str(Path(laimiu_src) / "utils" / "safety.py"),
+        str(Path(laimiu_src) / "utils" / "io.py"),
+        str(Path(laimiu_src) / "utils" / "logging.py"),
+    }
+
+    if resolved in protected_files:
         return True
 
-    # Protect the project root pyproject.toml
+    # Protect pyproject.toml
     project_dir = str(Path(laimiu.__file__).parent.parent.resolve())
     if resolved == str(Path(project_dir) / "pyproject.toml"):
         return True

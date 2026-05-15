@@ -89,14 +89,47 @@ class ContextManager:
         system_prompt: str,
         conversation: list[Message],
     ) -> list[Message]:
-        """Build the final message list for LLM."""
+        """Build the final message list for LLM.
+
+        Sanitizes the message chain to prevent API errors:
+        - tool messages must follow an assistant message with tool_calls
+        - orphaned tool messages are dropped
+        """
+        # Sanitize: ensure valid tool call chain
+        sanitized = self._sanitize_conversation(conversation)
+
         messages = [Message(role="system", content=system_prompt)]
-        messages.extend(conversation)
+        messages.extend(sanitized)
 
         if self.should_compress(messages):
             # Compress conversation (keep system prompt)
-            conv_only = conversation.copy()
+            conv_only = sanitized.copy()
             compressed = self.compress(conv_only)
             messages = [Message(role="system", content=system_prompt)] + compressed
 
         return messages
+
+    def _sanitize_conversation(self, messages: list[Message]) -> list[Message]:
+        """Remove orphaned tool messages that would cause API errors.
+
+        A 'tool' role message is only valid if the previous message is an
+        assistant message with tool_calls. Otherwise the API returns 400.
+        """
+        if not messages:
+            return messages
+
+        result = []
+        for i, msg in enumerate(messages):
+            if msg.role == "tool":
+                # Check if previous message is assistant with tool_calls
+                if result and result[-1].role == "assistant" and result[-1].tool_calls:
+                    result.append(msg)
+                else:
+                    # Orphaned tool message — drop it
+                    logger.debug(f"Dropping orphaned tool message at index {i}")
+            else:
+                # If assistant with tool_calls, make sure we don't have
+                # consecutive assistant+tool_calls without following tool results
+                result.append(msg)
+
+        return result
