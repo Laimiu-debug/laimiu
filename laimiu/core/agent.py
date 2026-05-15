@@ -212,6 +212,11 @@ class AgentLoop:
             else:
                 # No tool calls - we're done
                 full_response = accumulated_content
+                # CRITICAL: add assistant response to conversation history
+                self.conversation.append(Message(
+                    role="assistant",
+                    content=accumulated_content,
+                ))
                 break
 
         # Save turn to memory
